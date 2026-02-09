@@ -1,10 +1,11 @@
 import { Tabs } from "expo-router";
 import { Timer, Calendar, BarChart2, Settings } from "lucide-react-native";
 import { colors } from "../../src/theme/tokens";
-import { useColorScheme, Platform } from "react-native";
+import { Platform } from "react-native";
+import { useAppColorScheme } from "../../src/lib/store";
 
 export default function TabsLayout() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
 
     return (

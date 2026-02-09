@@ -18,7 +18,6 @@ const resources = {
             },
             auth: {
                 welcomeBack: "Bentornato",
-                quickLogin: "🚀 Accesso Rapido (Test)",
                 login: "Accedi",
                 or: "oppure",
             },
@@ -41,7 +40,6 @@ const resources = {
             },
             auth: {
                 welcomeBack: "Welcome Back",
-                quickLogin: "🚀 Quick Login (Test)",
                 login: "Login",
                 or: "or",
             },

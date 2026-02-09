@@ -1,13 +1,17 @@
-import { View, Text, StyleSheet, ScrollView, Pressable, useColorScheme, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ScrollView, Pressable, ActivityIndicator } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, borderRadius, typography } from "../../src/theme/tokens";
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Animated, { FadeInDown, ZoomIn, FadeOut, withRepeat, withSequence, withTiming, useAnimatedStyle, useSharedValue } from "react-native-reanimated";
 import { Clock, Play, Square } from "lucide-react-native";
 import { api } from "../../src/lib/api";
 import { auth } from "../../src/lib/firebase";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { LifeArea, Activity, TimeEntry } from "../../src/types";
+import { useAppColorScheme } from "../../src/lib/store";
+import * as Haptics from "expo-haptics";
+import { LinearGradient } from "expo-linear-gradient";
+import LiveMonitor from "../../modules/live-monitor";
 
 function PulseDot() {
     const opacity = useSharedValue(1);
@@ -18,8 +22,10 @@ function PulseDot() {
     return <Animated.View style={[styles.pulseDot, style]} />;
 }
 
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
 export default function TimerScreen() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
     const [activeTab, setActiveTab] = useState("Tutte");
     const [activeEntry, setActiveEntry] = useState<TimeEntry | null>(null);
@@ -56,6 +62,7 @@ export default function TimerScreen() {
         mutationFn: (activityId: string) => api.startEntry(activityId),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["timeEntries"] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
         }
     });
 
@@ -63,6 +70,7 @@ export default function TimerScreen() {
         mutationFn: (entryId: string) => api.stopEntry(entryId),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["timeEntries"] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
         }
     });
 
@@ -78,6 +86,16 @@ export default function TimerScreen() {
     };
 
     const [elapsed, setElapsed] = useState(0);
+    const timerGlow = useSharedValue(0);
+    const timerAuraStyle = useAnimatedStyle(() => ({
+        opacity: timerGlow.value * 0.25,
+        transform: [{ scale: 1 + timerGlow.value * 0.08 }],
+    }));
+    const trackingBadgeStyle = useAnimatedStyle(() => ({
+        transform: [{ scale: 1 + timerGlow.value * 0.02 }],
+        opacity: 0.9 + timerGlow.value * 0.1,
+    }));
+    const prevEntryIdRef = useRef<string | null>(null);
 
     useEffect(() => {
         let interval: any;
@@ -94,6 +112,41 @@ export default function TimerScreen() {
 
     const activeActivity = activities.find(a => a.id === activeEntry?.activityId);
     const activeArea = lifeAreas.find(la => la.id === activeActivity?.lifeAreaId);
+    const activeColor = activeActivity?.color || colors.primary.cyan;
+
+    useEffect(() => {
+        timerGlow.value = withRepeat(withSequence(withTiming(1, { duration: 1200 }), withTiming(0, { duration: 1200 })), -1);
+    }, []);
+
+    useEffect(() => {
+        const syncLiveActivity = async () => {
+            if (activeEntry?.id && activeActivity) {
+                const startTime = activeEntry.startTime?.toDate?.().getTime() || Date.now();
+                try {
+                    await LiveMonitor.update({
+                        activityName: activeActivity.name,
+                        activityColor: activeActivity.color || colors.primary.cyan,
+                        startTime,
+                    });
+                } catch (error) {
+                    console.warn("Failed to update live monitor:", error);
+                }
+                prevEntryIdRef.current = activeEntry.id;
+                return;
+            }
+
+            if (!activeEntry?.id && prevEntryIdRef.current) {
+                prevEntryIdRef.current = null;
+                try {
+                    await LiveMonitor.stop();
+                } catch (error) {
+                    console.warn("Failed to stop live monitor:", error);
+                }
+            }
+        };
+
+        syncLiveActivity();
+    }, [activeEntry?.id, activeActivity?.id]);
 
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
@@ -106,33 +159,57 @@ export default function TimerScreen() {
                     <Animated.View
                         entering={ZoomIn.duration(400)}
                         exiting={FadeOut}
-                        style={[
-                            styles.activeTimerCard,
-                            { backgroundColor: activeActivity?.color || colors.primary.cyan }
-                        ]}
+                        style={styles.activeTimerCard}
                     >
-                        <View style={styles.activeCardContent}>
-                            <View style={styles.activeInfoRow}>
-                                <View style={styles.trackingBadge}>
-                                    <PulseDot />
-                                    <Text style={styles.trackingText}>TRACCIANDO</Text>
+                        <LinearGradient
+                            colors={[activeColor, "#0B1220"]}
+                            start={{ x: 0, y: 0 }}
+                            end={{ x: 1, y: 1 }}
+                            style={styles.activeGradient}
+                        >
+                            <View style={[styles.activeGlowTop, { backgroundColor: activeColor }]} />
+                            <View style={[styles.activeGlowBottom, { backgroundColor: activeColor }]} />
+                            <View style={styles.activeCardContent}>
+                                <View style={styles.activeInfoRow}>
+                                    <Animated.View style={[styles.trackingBadge, trackingBadgeStyle]}>
+                                        <PulseDot />
+                                        <Text style={styles.trackingText}>IN CORSO</Text>
+                                    </Animated.View>
+                                    <Text style={styles.activeTimerLabel}>SESSIONE</Text>
                                 </View>
-                            </View>
 
-                            <View style={styles.mainTimerRow}>
-                                <View style={styles.timerTextContainer}>
-                                    <Text style={styles.activeActivityName}>{activeActivity?.name || "Attività"}</Text>
-                                    <Text style={styles.activeAreaName}>{activeArea?.name || "Area"}</Text>
+                                <View style={styles.mainTimerRow}>
+                                    <View style={styles.timerLeftColumn}>
+                                        <Text style={styles.activeActivityName} numberOfLines={1}>
+                                            {activeActivity?.name || "Attività"}
+                                        </Text>
+                                        <Text style={styles.activeAreaName} numberOfLines={1}>
+                                            {activeArea?.name || "Area"}
+                                        </Text>
+                                    </View>
+                                    <View style={styles.timerRightColumn}>
+                                        <Animated.View style={[styles.timerAura, { backgroundColor: activeColor }, timerAuraStyle]} />
+                                        <Animated.Text entering={ZoomIn.duration(250)} style={styles.timerClockText}>
+                                            {formatTime(elapsed)}
+                                        </Animated.Text>
+                                        <Text style={styles.timerSubtext}>ore:min:sec</Text>
+                                    </View>
                                 </View>
-                                <Text style={styles.timerClockText}>{formatTime(elapsed)}</Text>
-                                <Pressable
-                                    onPress={() => stopTimerMutation.mutate(activeEntry.id)}
-                                    style={styles.activeStopButton}
-                                >
-                                    <Square size={24} color={activeActivity?.color || colors.primary.cyan} fill={activeActivity?.color || colors.primary.cyan} />
-                                </Pressable>
+                                <View style={styles.timerFooterRow}>
+                                    <View style={styles.timerMetaRow}>
+                                        <Text style={styles.timerMetaText}>Focus attivo</Text>
+                                        <View style={styles.timerMetaDot} />
+                                        <Text style={styles.timerMetaText}>Sessione in corso</Text>
+                                    </View>
+                                    <Pressable
+                                        onPress={() => stopTimerMutation.mutate(activeEntry.id)}
+                                        style={styles.activeStopButton}
+                                    >
+                                        <Square size={20} color={activeColor} fill={activeColor} />
+                                    </Pressable>
+                                </View>
                             </View>
-                        </View>
+                        </LinearGradient>
                     </Animated.View>
                 ) : (
                     <View style={[styles.emptyTimerPlaceholder, { borderColor: themeColors.border, backgroundColor: themeColors.surface }]}>
@@ -174,9 +251,24 @@ export default function TimerScreen() {
                         {filteredActivities.length > 0 ? filteredActivities.map((activity, i) => {
                             const isRunning = activeEntry?.activityId === activity.id;
                             const area = lifeAreas.find(la => la.id === activity.lifeAreaId);
+                            const handleActivityPress = async () => {
+                                Haptics.selectionAsync().catch(() => { });
+                                try {
+                                    if (isRunning) {
+                                        await stopTimerMutation.mutateAsync(activeEntry!.id);
+                                        return;
+                                    }
+                                    if (activeEntry?.id) {
+                                        await stopTimerMutation.mutateAsync(activeEntry.id);
+                                    }
+                                    await startTimerMutation.mutateAsync(activity.id);
+                                } catch (error) {
+                                    console.warn("Failed to switch activity:", error);
+                                }
+                            };
 
                             return (
-                                <Animated.View
+                                <AnimatedPressable
                                     key={activity.id}
                                     entering={FadeInDown.delay(i * 50).duration(400)}
                                     style={[
@@ -187,27 +279,38 @@ export default function TimerScreen() {
                                             borderWidth: isRunning ? 2 : 1
                                         }
                                     ]}
+                                    onPress={handleActivityPress}
                                 >
                                     <View style={styles.activityItemMain}>
+                                        <View style={[styles.activityAccent, { backgroundColor: activity.color }]} />
                                         <View style={[styles.dot, { backgroundColor: activity.color }]} />
                                         <View style={styles.activityItemInfo}>
-                                            <Text style={[styles.activityItemName, { color: themeColors.textPrimary }]}>{activity.name}</Text>
+                                            <View style={styles.activityTitleRow}>
+                                                <Text style={[styles.activityItemName, { color: themeColors.textPrimary }]} numberOfLines={1}>
+                                                    {activity.name}
+                                                </Text>
+                                                {isRunning && (
+                                                    <Animated.View
+                                                        entering={ZoomIn.duration(200)}
+                                                        style={[styles.livePill, { backgroundColor: activity.color + "20", borderColor: activity.color }]}
+                                                    >
+                                                        <Text style={[styles.livePillText, { color: activity.color }]}>{formatTime(elapsed)}</Text>
+                                                    </Animated.View>
+                                                )}
+                                            </View>
                                             <Text style={[styles.activityItemArea, { color: themeColors.textTertiary }]}>
-                                                {isRunning ? formatTime(elapsed) : (area?.name || "Life Area")}
+                                                {area?.name || "Life Area"}
                                             </Text>
                                         </View>
-                                        <Pressable
-                                            onPress={() => isRunning ? stopTimerMutation.mutate(activeEntry!.id) : startTimerMutation.mutate(activity.id)}
-                                            style={[styles.actionButton, { backgroundColor: isRunning ? activity.color + '20' : themeColors.background }]}
-                                        >
+                                        <View style={[styles.actionButton, { backgroundColor: isRunning ? activity.color + '20' : themeColors.background }]}>
                                             {isRunning ? (
                                                 <Square size={20} color={activity.color} fill={activity.color} />
                                             ) : (
                                                 <Play size={20} color={colors.primary.cyan} fill={colors.primary.cyan} />
                                             )}
-                                        </Pressable>
+                                        </View>
                                     </View>
-                                </Animated.View>
+                                </AnimatedPressable>
                             );
                         }) : (
                             <View style={styles.emptyState}>
@@ -239,13 +342,34 @@ const styles = StyleSheet.create({
     },
     activeTimerCard: {
         borderRadius: borderRadius.xl,
-        padding: spacing.xl,
         marginBottom: spacing["2xl"],
         elevation: 8,
         shadowColor: "#000",
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.2,
         shadowRadius: 8,
+        overflow: "hidden",
+    },
+    activeGradient: {
+        padding: spacing.lg,
+    },
+    activeGlowTop: {
+        position: "absolute",
+        width: 200,
+        height: 200,
+        borderRadius: 100,
+        top: -120,
+        right: -80,
+        opacity: 0.35,
+    },
+    activeGlowBottom: {
+        position: "absolute",
+        width: 260,
+        height: 260,
+        borderRadius: 130,
+        bottom: -160,
+        left: -120,
+        opacity: 0.2,
     },
     activeCardContent: {
         gap: spacing.md,
@@ -276,13 +400,18 @@ const styles = StyleSheet.create({
         fontWeight: typography.weight.bold,
         letterSpacing: 0.5,
     },
+    activeTimerLabel: {
+        color: "rgba(255,255,255,0.7)",
+        fontSize: typography.size.xs,
+        fontWeight: typography.weight.semibold,
+        letterSpacing: 0.6,
+        textTransform: "uppercase",
+    },
     mainTimerRow: {
         flexDirection: "row",
         alignItems: "center",
         justifyContent: "space-between",
-    },
-    timerTextContainer: {
-        flex: 1,
+        gap: spacing.md,
     },
     activeActivityName: {
         color: "#FFF",
@@ -294,15 +423,58 @@ const styles = StyleSheet.create({
         fontSize: typography.size.sm,
         marginTop: 2,
     },
+    timerLeftColumn: {
+        flex: 1,
+        minWidth: 0,
+    },
+    timerRightColumn: {
+        alignItems: "flex-end",
+    },
+    timerAura: {
+        position: "absolute",
+        width: 140,
+        height: 140,
+        borderRadius: 70,
+        right: -40,
+        top: -40,
+    },
     timerClockText: {
         color: "#FFF",
         fontSize: typography.size["3xl"],
         fontWeight: typography.weight.bold,
-        marginHorizontal: spacing.md,
+        fontVariant: ["tabular-nums"],
+        letterSpacing: 1,
+    },
+    timerSubtext: {
+        color: "rgba(255,255,255,0.7)",
+        fontSize: typography.size.xs,
+        marginTop: 4,
+        letterSpacing: 0.4,
+    },
+    timerFooterRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+    },
+    timerMetaRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        gap: 8,
+    },
+    timerMetaText: {
+        color: "rgba(255,255,255,0.7)",
+        fontSize: typography.size.xs,
+        letterSpacing: 0.3,
+    },
+    timerMetaDot: {
+        width: 4,
+        height: 4,
+        borderRadius: 2,
+        backgroundColor: "rgba(255,255,255,0.5)",
     },
     activeStopButton: {
-        width: 50,
-        height: 50,
+        width: 40,
+        height: 40,
         borderRadius: 12,
         backgroundColor: "#FFF",
         justifyContent: "center",
@@ -347,7 +519,7 @@ const styles = StyleSheet.create({
         fontWeight: typography.weight.semibold,
     },
     activitiesList: {
-        gap: spacing.md,
+        gap: spacing.sm,
     },
     activityItemCard: {
         borderRadius: borderRadius.lg,
@@ -363,6 +535,13 @@ const styles = StyleSheet.create({
         flexDirection: "row",
         alignItems: "center",
     },
+    activityAccent: {
+        width: 4,
+        height: 36,
+        borderRadius: 2,
+        marginRight: spacing.sm,
+        opacity: 0.9,
+    },
     dot: {
         width: 12,
         height: 12,
@@ -371,14 +550,34 @@ const styles = StyleSheet.create({
     },
     activityItemInfo: {
         flex: 1,
+        paddingRight: spacing.sm,
+    },
+    activityTitleRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: spacing.sm,
     },
     activityItemName: {
-        fontSize: typography.size.base,
+        fontSize: typography.size.lg,
         fontWeight: typography.weight.bold,
+        flex: 1,
     },
     activityItemArea: {
-        fontSize: typography.size.sm,
+        fontSize: typography.size.base,
         marginTop: 2,
+    },
+    livePill: {
+        borderWidth: 1,
+        paddingHorizontal: 8,
+        paddingVertical: 4,
+        borderRadius: borderRadius.full,
+    },
+    livePillText: {
+        fontSize: typography.size.sm,
+        fontWeight: typography.weight.bold,
+        fontVariant: ["tabular-nums"],
+        letterSpacing: 0.4,
     },
     actionButton: {
         width: 44,

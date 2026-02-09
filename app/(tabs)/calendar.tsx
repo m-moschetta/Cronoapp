@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, useColorScheme, ActivityIndicator, Pressable, Dimensions, Alert, Platform } from "react-native";
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Dimensions, Alert, Platform, Modal, TextInput } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, borderRadius, typography } from "../../src/theme/tokens";
 import { useState, useMemo, useRef, useEffect } from "react";
@@ -23,7 +23,8 @@ import {
 import { it } from "date-fns/locale";
 import Animated, { FadeIn, SlideInRight, useSharedValue, useAnimatedStyle, withSpring, runOnJS } from "react-native-reanimated";
 import { ChevronLeft, ChevronRight, Plus, Minus, MoreVertical, Trash2, Clock, GripHorizontal, Calendar } from "lucide-react-native";
-import { TimeEntry, Activity } from "../../src/types";
+import { TimeEntry, Activity, LifeArea } from "../../src/types";
+import { useAppColorScheme } from "../../src/lib/store";
 import {
     Gesture,
     GestureDetector,
@@ -159,10 +160,16 @@ const EntryCard = ({
 };
 
 export default function CalendarScreen() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
     const [selectedDate, setSelectedDate] = useState(new Date());
     const [selectedEntryId, setSelectedEntryId] = useState<string | null>(null);
+    const [isAddModalOpen, setIsAddModalOpen] = useState(false);
+    const [activityQuery, setActivityQuery] = useState("");
+    const [selectedAreaFilter, setSelectedAreaFilter] = useState<string>("Tutte");
+    const [selectedDuration, setSelectedDuration] = useState<number>(60);
+    const [startHour, setStartHour] = useState<number>(9);
+    const [startMinute, setStartMinute] = useState<number>(0);
     const [now, setNow] = useState(new Date());
     const queryClient = useQueryClient();
     const scrollRef = useRef<ScrollView>(null);
@@ -182,6 +189,15 @@ export default function CalendarScreen() {
         staleTime: 5 * 60 * 1000,
         enabled: !!user,
     });
+
+    const { data: fetchedLifeAreas = [] } = useQuery<LifeArea[]>({
+        queryKey: ["lifeAreas", user?.uid],
+        queryFn: () => api.getLifeAreas(),
+        staleTime: 5 * 60 * 1000,
+        enabled: !!user,
+    });
+    const areaList = useMemo<LifeArea[]>(() => fetchedLifeAreas ?? [], [fetchedLifeAreas]);
+    const lifeAreas = areaList;
 
     // Fetch Entries for selected date
     const { data: entries = [], isLoading } = useQuery<TimeEntry[]>({
@@ -265,18 +281,35 @@ export default function CalendarScreen() {
             Alert.alert("Nessuna attività", "Crea prima delle attività nelle Impostazioni > Gestione Dati.");
             return;
         }
+        setActivityQuery("");
+        setSelectedAreaFilter("Tutte");
+        const baseStart = getDefaultStart();
+        setSelectedDuration(60);
+        setStartHour(baseStart.getHours());
+        setStartMinute(baseStart.getMinutes() - (baseStart.getMinutes() % 5));
+        setIsAddModalOpen(true);
+    };
 
-        // For simplicity, let's pick the first activity and add 1 hour from now
-        // A more advanced implementation would show a picker
-        const activity = activities[0];
-        const start = new Date();
-        const end = addMinutes(start, 60);
+    const getDefaultStart = () => {
+        const now = new Date();
+        if (isSameDay(selectedDate, now)) {
+            return now;
+        }
+        const base = new Date(selectedDate);
+        base.setHours(9, 0, 0, 0);
+        return base;
+    };
 
+    const handleAddActivity = (activity: Activity) => {
+        const start = new Date(selectedDate);
+        start.setHours(startHour, startMinute, 0, 0);
+        const end = addMinutes(start, selectedDuration);
         addEntryMutation.mutate({
             activityId: activity.id,
             startTime: Timestamp.fromDate(start),
             endTime: Timestamp.fromDate(end),
         });
+        setIsAddModalOpen(false);
     };
 
     const renderTimeline = () => {
@@ -402,6 +435,120 @@ export default function CalendarScreen() {
             <Pressable style={styles.fab} onPress={handleAddManual}>
                 <Plus size={32} color="#FFF" />
             </Pressable>
+
+            <Modal visible={isAddModalOpen} transparent animationType="slide">
+                <View style={styles.modalOverlay}>
+                    <View style={[styles.modalContent, { backgroundColor: themeColors.surface }]}>
+                        <Text style={[styles.modalTitle, { color: themeColors.textPrimary }]}>Scegli attività</Text>
+                        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll} contentContainerStyle={styles.filterContainer}>
+                            {["Tutte", ...areaList.map((area) => area.name)].map((area) => (
+                                <Pressable
+                                    key={area}
+                                    onPress={() => setSelectedAreaFilter(area)}
+                                    style={[
+                                        styles.filterPill,
+                                        { backgroundColor: selectedAreaFilter === area ? colors.primary.cyan : themeColors.background },
+                                    ]}
+                                >
+                                    <Text style={[styles.filterText, { color: selectedAreaFilter === area ? "#FFF" : themeColors.textSecondary }]}>
+                                        {area}
+                                    </Text>
+                                </Pressable>
+                            ))}
+                        </ScrollView>
+                        <TextInput
+                            style={[styles.searchInput, { color: themeColors.textPrimary, borderColor: themeColors.border }]}
+                            placeholder="Cerca attività..."
+                            placeholderTextColor={themeColors.textTertiary}
+                            value={activityQuery}
+                            onChangeText={setActivityQuery}
+                        />
+                        <View style={styles.timeRow}>
+                            <Text style={[styles.timeLabel, { color: themeColors.textSecondary }]}>Inizio</Text>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                                {Array.from({ length: 24 }, (_, i) => i).map((hour) => (
+                                    <Pressable
+                                        key={hour}
+                                        onPress={() => setStartHour(hour)}
+                                        style={[
+                                            styles.timePill,
+                                            { borderColor: themeColors.border, backgroundColor: startHour === hour ? colors.primary.cyan : themeColors.background }
+                                        ]}
+                                    >
+                                        <Text style={[styles.timeText, { color: startHour === hour ? "#FFF" : themeColors.textSecondary }]}>
+                                            {hour.toString().padStart(2, "0")}
+                                        </Text>
+                                    </Pressable>
+                                ))}
+                            </ScrollView>
+                            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.minuteScroll}>
+                                {[0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55].map((minute) => (
+                                    <Pressable
+                                        key={minute}
+                                        onPress={() => setStartMinute(minute)}
+                                        style={[
+                                            styles.timePill,
+                                            { borderColor: themeColors.border, backgroundColor: startMinute === minute ? colors.primary.cyan : themeColors.background }
+                                        ]}
+                                    >
+                                        <Text style={[styles.timeText, { color: startMinute === minute ? "#FFF" : themeColors.textSecondary }]}>
+                                            {minute.toString().padStart(2, "0")}
+                                        </Text>
+                                    </Pressable>
+                                ))}
+                            </ScrollView>
+                        </View>
+                        <View style={styles.durationRow}>
+                            {[15, 30, 60, 90, 120].map((minutes) => (
+                                <Pressable
+                                    key={minutes}
+                                    onPress={() => setSelectedDuration(minutes)}
+                                    style={[
+                                        styles.durationPill,
+                                        { borderColor: themeColors.border, backgroundColor: selectedDuration === minutes ? colors.primary.cyan : themeColors.background }
+                                    ]}
+                                >
+                                    <Text style={[styles.durationText, { color: selectedDuration === minutes ? "#FFF" : themeColors.textSecondary }]}>
+                                        {minutes}m
+                                    </Text>
+                                </Pressable>
+                            ))}
+                        </View>
+                        <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+                            {activities
+                                .filter((activity) => activity.name.toLowerCase().includes(activityQuery.trim().toLowerCase()))
+                                .filter((activity) => {
+                                    if (selectedAreaFilter === "Tutte") return true;
+                                    const area = areaList.find((a) => a.id === activity.lifeAreaId);
+                                    return area?.name === selectedAreaFilter;
+                                })
+                                .map((activity) => {
+                                    const area = areaList.find((a) => a.id === activity.lifeAreaId);
+                                    return (
+                                        <Pressable
+                                            key={activity.id}
+                                            onPress={() => handleAddActivity(activity)}
+                                            style={[styles.modalRow, { borderColor: themeColors.border }]}
+                                        >
+                                            <View style={[styles.modalDot, { backgroundColor: activity.color || area?.color || colors.primary.cyan }]} />
+                                            <View style={styles.modalRowText}>
+                                                <Text style={[styles.modalRowTitle, { color: themeColors.textPrimary }]} numberOfLines={1}>
+                                                    {activity.name}
+                                                </Text>
+                                                <Text style={[styles.modalRowSubtitle, { color: themeColors.textTertiary }]} numberOfLines={1}>
+                                                    {area?.name || "Nessuna area"}
+                                                </Text>
+                                            </View>
+                                        </Pressable>
+                                    );
+                                })}
+                        </ScrollView>
+                        <Pressable onPress={() => setIsAddModalOpen(false)} style={[styles.modalClose, { backgroundColor: themeColors.background }]}>
+                            <Text style={{ color: themeColors.textSecondary }}>Chiudi</Text>
+                        </Pressable>
+                    </View>
+                </View>
+            </Modal>
         </SafeAreaView>
     );
 }
@@ -591,6 +738,121 @@ const styles = StyleSheet.create({
         shadowOffset: { width: 0, height: 4 },
         shadowOpacity: 0.3,
         shadowRadius: 8,
+    },
+    modalOverlay: {
+        flex: 1,
+        backgroundColor: "rgba(0,0,0,0.5)",
+        justifyContent: "flex-end",
+    },
+    modalContent: {
+        padding: spacing.xl,
+        borderTopLeftRadius: 28,
+        borderTopRightRadius: 28,
+        maxHeight: "70%",
+    },
+    modalTitle: {
+        fontSize: typography.size.xl,
+        fontWeight: typography.weight.bold,
+        marginBottom: spacing.md,
+    },
+    filterScroll: {
+        marginBottom: spacing.md,
+    },
+    filterContainer: {
+        gap: spacing.sm,
+        paddingRight: spacing.sm,
+    },
+    filterPill: {
+        paddingHorizontal: spacing.md,
+        height: 34,
+        borderRadius: 17,
+        justifyContent: "center",
+        alignItems: "center",
+    },
+    filterText: {
+        fontSize: typography.size.sm,
+        fontWeight: typography.weight.bold,
+    },
+    searchInput: {
+        height: 44,
+        borderWidth: 1,
+        borderRadius: 12,
+        paddingHorizontal: spacing.md,
+        fontSize: typography.size.sm,
+        marginBottom: spacing.md,
+    },
+    durationRow: {
+        flexDirection: "row",
+        flexWrap: "wrap",
+        gap: spacing.sm,
+        marginBottom: spacing.md,
+    },
+    timeRow: {
+        marginBottom: spacing.md,
+    },
+    timeLabel: {
+        fontSize: typography.size.sm,
+        fontWeight: typography.weight.bold,
+        marginBottom: spacing.sm,
+    },
+    timePill: {
+        paddingHorizontal: spacing.md,
+        paddingVertical: 6,
+        borderRadius: 20,
+        borderWidth: 1,
+        marginRight: spacing.sm,
+    },
+    timeText: {
+        fontSize: typography.size.sm,
+        fontWeight: typography.weight.bold,
+    },
+    minuteScroll: {
+        marginTop: spacing.sm,
+    },
+    durationPill: {
+        paddingHorizontal: spacing.md,
+        paddingVertical: 6,
+        borderRadius: 20,
+        borderWidth: 1,
+    },
+    durationText: {
+        fontSize: typography.size.sm,
+        fontWeight: typography.weight.bold,
+    },
+    modalList: {
+        marginBottom: spacing.md,
+    },
+    modalRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        paddingVertical: spacing.sm,
+        paddingHorizontal: spacing.md,
+        borderWidth: 1,
+        borderRadius: 14,
+        marginBottom: spacing.sm,
+    },
+    modalDot: {
+        width: 12,
+        height: 12,
+        borderRadius: 6,
+        marginRight: spacing.sm,
+    },
+    modalRowText: {
+        flex: 1,
+    },
+    modalRowTitle: {
+        fontSize: typography.size.base,
+        fontWeight: typography.weight.bold,
+    },
+    modalRowSubtitle: {
+        fontSize: typography.size.xs,
+        marginTop: 2,
+    },
+    modalClose: {
+        height: 48,
+        borderRadius: 12,
+        alignItems: "center",
+        justifyContent: "center",
     },
     resizeHandle: {
         position: 'absolute',

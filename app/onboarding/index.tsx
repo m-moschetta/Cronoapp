@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, useColorScheme, ActivityIndicator, Alert, Platform } from "react-native";
+import { View, Text, StyleSheet, Pressable, ScrollView, ActivityIndicator, Alert, Platform } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, borderRadius, typography } from "../../src/theme/tokens";
 import { useState } from "react";
@@ -6,6 +6,7 @@ import Animated, { FadeInDown, ZoomIn } from "react-native-reanimated";
 import { Check, ArrowRight, Briefcase, Heart, Palette, GraduationCap, Sparkles } from "lucide-react-native";
 import { api } from "../../src/lib/api";
 import { useRouter } from "expo-router";
+import { useAppColorScheme } from "../../src/lib/store";
 
 const TEMPLATES = [
     {
@@ -47,7 +48,7 @@ const TEMPLATES = [
 ];
 
 export default function OnboardingScreen() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
     const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null);
     const [loading, setLoading] = useState(false);

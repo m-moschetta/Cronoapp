@@ -1,19 +1,21 @@
-import { View, Text, StyleSheet, Pressable, ScrollView, useColorScheme, TextInput, Modal, Alert } from "react-native";
+import { View, Text, StyleSheet, Pressable, ScrollView, TextInput, Modal, Alert, KeyboardAvoidingView, Platform, Keyboard } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, borderRadius, typography } from "../src/theme/tokens";
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { api } from "../src/lib/api";
-import { Plus, Trash2, ChevronLeft, Layout, Activity as ActivityIcon } from "lucide-react-native";
+import { auth } from "../src/lib/firebase";
+import { Plus, Trash2, ChevronLeft, Layout, Activity as ActivityIcon, Pencil } from "lucide-react-native";
 import { useRouter } from "expo-router";
 
 import { LifeArea, Activity } from "../src/types";
 import { Dimensions } from "react-native";
+import { useAppColorScheme } from "../src/lib/store";
 
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 
 export default function ManageDataScreen() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
     const queryClient = useQueryClient();
     const router = useRouter();
@@ -22,14 +24,27 @@ export default function ManageDataScreen() {
     const [modalType, setModalType] = useState<"area" | "activity">("area");
     const [newItemName, setNewItemName] = useState("");
     const [selectedAreaId, setSelectedAreaId] = useState("");
+    const [modalMode, setModalMode] = useState<"create" | "edit">("create");
+    const [editingId, setEditingId] = useState<string | null>(null);
 
-    const { data: areas = [] } = useQuery<LifeArea[]>({ queryKey: ["lifeAreas"], queryFn: api.getLifeAreas });
-    const { data: activities = [] } = useQuery<Activity[]>({ queryKey: ["activities"], queryFn: api.getActivities });
+    const user = auth.currentUser;
+    const { data: areas = [] } = useQuery<LifeArea[]>({
+        queryKey: ["lifeAreas", user?.uid],
+        queryFn: api.getLifeAreas,
+        enabled: !!user,
+    });
+    const { data: activities = [] } = useQuery<Activity[]>({
+        queryKey: ["activities", user?.uid],
+        queryFn: api.getActivities,
+        enabled: !!user,
+    });
 
     const createAreaMutation = useMutation({
         mutationFn: (name: string) => api.createLifeArea({ name, color: colors.primary.cyan }),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["lifeAreas"] });
+            queryClient.invalidateQueries({ queryKey: ["lifeAreas", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
             setIsModalOpen(false);
             setNewItemName("");
         }
@@ -39,26 +54,135 @@ export default function ManageDataScreen() {
         mutationFn: (data: any) => api.createActivity(data),
         onSuccess: () => {
             queryClient.invalidateQueries({ queryKey: ["activities"] });
+            queryClient.invalidateQueries({ queryKey: ["activities", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
             setIsModalOpen(false);
             setNewItemName("");
+        }
+    });
+
+    const updateAreaMutation = useMutation({
+        mutationFn: ({ id, name }: { id: string; name: string }) => api.updateLifeArea(id, { name }),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["lifeAreas"] });
+            queryClient.invalidateQueries({ queryKey: ["lifeAreas", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
+            setIsModalOpen(false);
+            setNewItemName("");
+            setEditingId(null);
+        }
+    });
+
+    const updateActivityMutation = useMutation({
+        mutationFn: ({ id, data }: { id: string; data: any }) => api.updateActivity(id, data),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["activities"] });
+            queryClient.invalidateQueries({ queryKey: ["activities", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
+            setIsModalOpen(false);
+            setNewItemName("");
+            setEditingId(null);
+        }
+    });
+
+    const deleteAreaMutation = useMutation({
+        mutationFn: (id: string) => api.deleteLifeArea(id),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["lifeAreas"] });
+            queryClient.invalidateQueries({ queryKey: ["lifeAreas", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["activities"] });
+            queryClient.invalidateQueries({ queryKey: ["activities", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
+        }
+    });
+
+    const deleteActivityMutation = useMutation({
+        mutationFn: (id: string) => api.deleteActivity(id),
+        onSuccess: () => {
+            queryClient.invalidateQueries({ queryKey: ["activities"] });
+            queryClient.invalidateQueries({ queryKey: ["activities", user?.uid] });
+            queryClient.invalidateQueries({ queryKey: ["reports"] });
         }
     });
 
     const handleSave = () => {
         if (!newItemName) return;
         if (modalType === "area") {
-            createAreaMutation.mutate(newItemName);
+            if (modalMode === "edit" && editingId) {
+                updateAreaMutation.mutate({ id: editingId, name: newItemName });
+            } else {
+                createAreaMutation.mutate(newItemName);
+            }
         } else {
             if (!selectedAreaId) {
                 Alert.alert("Errore", "Seleziona un'Area Life");
                 return;
             }
-            createActivityMutation.mutate({
-                name: newItemName,
-                lifeAreaId: selectedAreaId,
-                color: areas.find((a) => a.id === selectedAreaId)?.color || colors.primary.cyan
-            });
+            if (modalMode === "edit" && editingId) {
+                updateActivityMutation.mutate({
+                    id: editingId,
+                    data: {
+                        name: newItemName,
+                        lifeAreaId: selectedAreaId,
+                        color: areas.find((a) => a.id === selectedAreaId)?.color || colors.primary.cyan
+                    }
+                });
+            } else {
+                createActivityMutation.mutate({
+                    name: newItemName,
+                    lifeAreaId: selectedAreaId,
+                    color: areas.find((a) => a.id === selectedAreaId)?.color || colors.primary.cyan
+                });
+            }
         }
+    };
+
+    const openCreateModal = (type: "area" | "activity") => {
+        setModalType(type);
+        setModalMode("create");
+        setEditingId(null);
+        setNewItemName("");
+        setSelectedAreaId("");
+        setIsModalOpen(true);
+    };
+
+    const openEditArea = (area: LifeArea) => {
+        setModalType("area");
+        setModalMode("edit");
+        setEditingId(area.id);
+        setNewItemName(area.name);
+        setIsModalOpen(true);
+    };
+
+    const openEditActivity = (activity: Activity) => {
+        setModalType("activity");
+        setModalMode("edit");
+        setEditingId(activity.id);
+        setNewItemName(activity.name);
+        setSelectedAreaId(activity.lifeAreaId);
+        setIsModalOpen(true);
+    };
+
+    const confirmDeleteArea = (area: LifeArea) => {
+        Alert.alert(
+            "Elimina area",
+            "Vuoi eliminare questa area e tutte le attività collegate?",
+            [
+                { text: "Annulla", style: "cancel" },
+                { text: "Elimina", style: "destructive", onPress: () => deleteAreaMutation.mutate(area.id) }
+            ]
+        );
+    };
+
+    const confirmDeleteActivity = (activity: Activity) => {
+        Alert.alert(
+            "Elimina attività",
+            "Vuoi eliminare questa attività?",
+            [
+                { text: "Annulla", style: "cancel" },
+                { text: "Elimina", style: "destructive", onPress: () => deleteActivityMutation.mutate(activity.id) }
+            ]
+        );
     };
 
     return (
@@ -91,6 +215,14 @@ export default function ManageDataScreen() {
                             <Text style={[styles.areaName, { color: themeColors.textPrimary }]} numberOfLines={1}>
                                 {area.name}
                             </Text>
+                            <View style={styles.areaActions}>
+                                <Pressable onPress={() => openEditArea(area)} style={styles.iconButton}>
+                                    <Pencil size={16} color={themeColors.textSecondary} />
+                                </Pressable>
+                                <Pressable onPress={() => confirmDeleteArea(area)} style={styles.iconButton}>
+                                    <Trash2 size={16} color={colors.secondary.red} />
+                                </Pressable>
+                            </View>
                         </View>
                     ))}
                 </View>
@@ -100,7 +232,7 @@ export default function ManageDataScreen() {
                     <View style={styles.sectionHeaderRow}>
                         <Text style={[styles.sectionTitle, { color: themeColors.textTertiary }]}>ATTIVITÀ</Text>
                         <Pressable
-                            onPress={() => { setModalType("activity"); setSelectedAreaId(""); setIsModalOpen(true); }}
+                            onPress={() => openCreateModal("activity")}
                             style={[styles.addButton, { borderColor: themeColors.border }]}
                         >
                             <Plus size={14} color={themeColors.textSecondary} />
@@ -122,9 +254,14 @@ export default function ManageDataScreen() {
                                         {area?.name || "Nessuna Area"}
                                     </Text>
                                 </View>
-                                <Pressable style={styles.deleteBtn}>
-                                    <Trash2 size={18} color={colors.secondary.red} opacity={0.5} />
-                                </Pressable>
+                                <View style={styles.activityActions}>
+                                    <Pressable onPress={() => openEditActivity(activity)} style={styles.iconButton}>
+                                        <Pencil size={16} color={themeColors.textSecondary} />
+                                    </Pressable>
+                                    <Pressable onPress={() => confirmDeleteActivity(activity)} style={styles.iconButton}>
+                                        <Trash2 size={18} color={colors.secondary.red} />
+                                    </Pressable>
+                                </View>
                             </View>
                         );
                     })}
@@ -133,18 +270,29 @@ export default function ManageDataScreen() {
 
             <Pressable
                 style={styles.fab}
-                onPress={() => { setModalType("area"); setSelectedAreaId(""); setIsModalOpen(true); }}
+                onPress={() => openCreateModal("area")}
             >
                 <Plus size={32} color="#FFF" />
             </Pressable>
 
             {/* Add Modal */}
             <Modal visible={isModalOpen} transparent animationType="slide">
-                <View style={styles.modalOverlay}>
-                    <View style={[styles.modalContent, { backgroundColor: themeColors.surface }]}>
-                        <Text style={[styles.modalTitle, { color: themeColors.textPrimary }]}>
-                            {modalType === "area" ? "Nuova Area Life" : "Nuova Attività"}
-                        </Text>
+                <KeyboardAvoidingView
+                    style={[styles.modalOverlay, { paddingTop: spacing["3xl"] }]}
+                    behavior={Platform.OS === "ios" ? "padding" : undefined}
+                    keyboardVerticalOffset={80}
+                >
+                    <ScrollView contentContainerStyle={[styles.modalContent, { backgroundColor: themeColors.surface }]} keyboardShouldPersistTaps="handled">
+                        <View style={styles.modalHeaderRow}>
+                            <Text style={[styles.modalTitle, { color: themeColors.textPrimary, marginBottom: 0 }]}>
+                            {modalType === "area" ? (modalMode === "edit" ? "Modifica Area Life" : "Nuova Area Life") : (modalMode === "edit" ? "Modifica Attività" : "Nuova Attività")}
+                            </Text>
+                            {Platform.OS === "ios" && (
+                                <Pressable onPress={() => Keyboard.dismiss()} style={styles.doneButton}>
+                                    <Text style={[styles.doneButtonText, { color: themeColors.textSecondary }]}>Fine</Text>
+                                </Pressable>
+                            )}
+                        </View>
 
                         <TextInput
                             style={[styles.input, { color: themeColors.textPrimary, borderColor: themeColors.border }]}
@@ -183,8 +331,8 @@ export default function ManageDataScreen() {
                                 <Text style={styles.saveButtonText}>Salva</Text>
                             </Pressable>
                         </View>
-                    </View>
-                </View>
+                    </ScrollView>
+                </KeyboardAvoidingView>
             </Modal>
         </SafeAreaView>
     );
@@ -280,6 +428,16 @@ const styles = StyleSheet.create({
         fontSize: typography.size.sm,
         fontWeight: typography.weight.bold,
     },
+    areaActions: {
+        flexDirection: 'row',
+        gap: spacing.sm,
+        marginTop: spacing.sm,
+    },
+    iconButton: {
+        padding: 6,
+        borderRadius: 10,
+        backgroundColor: 'rgba(0,0,0,0.04)',
+    },
     activitiesList: {
         gap: spacing.md,
     },
@@ -313,8 +471,9 @@ const styles = StyleSheet.create({
         fontSize: typography.size.xs,
         marginTop: 2,
     },
-    deleteBtn: {
-        padding: 8,
+    activityActions: {
+        flexDirection: 'row',
+        gap: spacing.sm,
     },
     fab: {
         position: 'absolute',
@@ -347,6 +506,22 @@ const styles = StyleSheet.create({
         fontSize: typography.size.xl,
         fontWeight: typography.weight.bold,
         marginBottom: spacing.xl,
+    },
+    modalHeaderRow: {
+        flexDirection: "row",
+        alignItems: "center",
+        justifyContent: "space-between",
+        marginBottom: spacing.xl,
+    },
+    doneButton: {
+        paddingHorizontal: spacing.md,
+        paddingVertical: 6,
+        borderRadius: 12,
+        backgroundColor: "rgba(0,0,0,0.05)",
+    },
+    doneButtonText: {
+        fontSize: typography.size.sm,
+        fontWeight: typography.weight.bold,
     },
     input: {
         height: 56,

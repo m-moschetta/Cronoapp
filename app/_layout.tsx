@@ -2,15 +2,16 @@ import { DarkTheme, DefaultTheme, ThemeProvider } from "@react-navigation/native
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { useEffect, useState } from "react";
-import { useColorScheme } from "react-native";
+import { useAppColorScheme } from "../src/lib/store";
 import "../src/lib/i18n";
 import { auth, db } from "../src/lib/firebase";
-import { onAuthStateChanged } from "firebase/auth";
+import { onAuthStateChanged, User } from "firebase/auth";
 import { doc, getDoc, setDoc } from "firebase/firestore";
+import { initNotifications } from "../src/lib/notifications";
 
 const queryClient = new QueryClient();
 
-function useProtectedRoute(user: any, onboarded: boolean | null, isMounted: boolean) {
+function useProtectedRoute(user: User | null, onboarded: boolean | null, isMounted: boolean) {
     const segments = useSegments();
     const router = useRouter();
 
@@ -39,8 +40,8 @@ function useProtectedRoute(user: any, onboarded: boolean | null, isMounted: bool
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 export default function RootLayout() {
-    const colorScheme = useColorScheme();
-    const [user, setUser] = useState<any>(null);
+    const colorScheme = useAppColorScheme();
+    const [user, setUser] = useState<User | null>(null);
     const [onboarded, setOnboarded] = useState<boolean | null>(null);
     const [initializing, setInitializing] = useState(true);
     const [isMounted, setIsMounted] = useState(false);
@@ -50,6 +51,10 @@ export default function RootLayout() {
     }, []);
 
     useProtectedRoute(user, onboarded, isMounted);
+
+    useEffect(() => {
+        initNotifications();
+    }, []);
 
     useEffect(() => {
         const unsubscribe = onAuthStateChanged(auth, async (authUser) => {
@@ -92,7 +97,8 @@ export default function RootLayout() {
                     >
                         <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
                         <Stack.Screen name="login" options={{ headerShown: false }} />
-                        <Stack.Screen name="onboarding/index" options={{ presentation: "modal", title: "Benvenuto" }} />
+                    <Stack.Screen name="onboarding/index" options={{ presentation: "modal", title: "Benvenuto" }} />
+                    <Stack.Screen name="manage-data" options={{ headerShown: false }} />
                     </Stack>
                 </ThemeProvider>
             </QueryClientProvider>

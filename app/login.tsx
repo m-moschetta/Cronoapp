@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, Pressable, TextInput, useColorScheme, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableWithoutFeedback, Keyboard } from "react-native";
+import { View, Text, StyleSheet, Pressable, TextInput, KeyboardAvoidingView, Platform, Alert, ScrollView, TouchableWithoutFeedback, Keyboard } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, borderRadius, typography } from "../src/theme/tokens";
 import { useState } from "react";
@@ -8,9 +8,10 @@ import { LinearGradient } from "expo-linear-gradient";
 import { auth } from "../src/lib/firebase";
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from "firebase/auth";
 import { useRouter } from "expo-router";
+import { useAppColorScheme } from "../src/lib/store";
 
 export default function LoginScreen() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
     const [isLogin, setIsLogin] = useState(true);
     const [email, setEmail] = useState("");
@@ -28,19 +29,6 @@ export default function LoginScreen() {
             } else {
                 await createUserWithEmailAndPassword(auth, email, password);
             }
-            router.replace("/(tabs)");
-        } catch (error: any) {
-            Alert.alert("Errore", error.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleQuickLogin = async () => {
-        setLoading(true);
-        try {
-            // For testing purposes, we use a fixed account
-            await signInWithEmailAndPassword(auth, "test@test.com", "test1234");
             router.replace("/(tabs)");
         } catch (error: any) {
             Alert.alert("Errore", error.message);
@@ -77,26 +65,9 @@ export default function LoginScreen() {
                         </View>
 
                         <View style={styles.content}>
-                            <Animated.View entering={FadeInDown.delay(400)}>
-                                <Pressable
-                                    style={[styles.quickLoginButton, loading && { opacity: 0.7 }]}
-                                    onPress={handleQuickLogin}
-                                    disabled={loading}
-                                >
-                                    <LinearGradient
-                                        colors={[colors.primary.cyan, colors.primary.blue]}
-                                        start={{ x: 0, y: 0 }}
-                                        end={{ x: 1, y: 0 }}
-                                        style={styles.gradientButton}
-                                    >
-                                        <Text style={styles.quickLoginText}>🚀 Accesso Rapido (Test)</Text>
-                                    </LinearGradient>
-                                </Pressable>
-                            </Animated.View>
-
                             <View style={styles.dividerContainer}>
                                 <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
-                                <Text style={[styles.dividerText, { color: themeColors.textTertiary }]}>oppure</Text>
+                                <Text style={[styles.dividerText, { color: themeColors.textTertiary }]}>accedi</Text>
                                 <View style={[styles.divider, { backgroundColor: themeColors.border }]} />
                             </View>
 
@@ -197,19 +168,10 @@ const styles = StyleSheet.create({
     content: {
         paddingHorizontal: spacing.xl,
     },
-    quickLoginButton: {
-        borderRadius: borderRadius.lg,
-        overflow: "hidden",
-    },
     gradientButton: {
         paddingVertical: 16,
         alignItems: "center",
         justifyContent: "center",
-    },
-    quickLoginText: {
-        color: "#FFF",
-        fontSize: typography.size.lg,
-        fontWeight: typography.weight.bold,
     },
     dividerContainer: {
         flexDirection: "row",

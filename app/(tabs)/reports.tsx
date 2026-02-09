@@ -1,4 +1,4 @@
-import { View, Text, StyleSheet, ScrollView, useColorScheme, ActivityIndicator, Dimensions, Pressable } from "react-native";
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Dimensions, Pressable } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { colors, spacing, borderRadius, typography } from "../../src/theme/tokens";
 import { useState, useMemo } from "react";
@@ -19,13 +19,14 @@ import {
 import { it } from "date-fns/locale";
 import Animated, { FadeInDown, FadeIn } from "react-native-reanimated";
 import { Clock, TrendingUp, Calendar, Zap } from "lucide-react-native";
+import { useAppColorScheme } from "../../src/lib/store";
 
 const SCREEN_WIDTH = Dimensions.get("window").width;
 
 import { LifeArea, Activity, TimeEntry } from "../../src/types";
 
 export default function ReportsScreen() {
-    const colorScheme = useColorScheme() || "light";
+    const colorScheme = useAppColorScheme();
     const themeColors = colors[colorScheme];
     const [selectedPeriod, setSelectedPeriod] = useState("Settimana");
 
