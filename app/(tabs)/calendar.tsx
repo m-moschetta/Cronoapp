@@ -34,11 +34,29 @@ import {
 const { width: SCREEN_WIDTH } = Dimensions.get("window");
 const HOUR_HEIGHT = 80;
 const TIMELINE_LEFT_WIDTH = 60;
+const ENTRY_LEFT_OFFSET = 10;
+const ENTRY_RIGHT_OFFSET = 20;
+const ENTRY_COLUMN_GAP = 4;
+const MIN_ENTRY_HEIGHT = 40;
+const EVENT_AREA_WIDTH = SCREEN_WIDTH - TIMELINE_LEFT_WIDTH - ENTRY_LEFT_OFFSET - ENTRY_RIGHT_OFFSET;
+const MIN_HOUR_HEIGHT = 56;
+const MAX_HOUR_HEIGHT = 150;
+
+const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
 
+type PositionedEntry = {
+    entry: TimeEntry;
+    column: number;
+    totalColumns: number;
+};
+
 const EntryCard = ({
     entry,
+    column,
+    totalColumns,
+    hourHeight,
     activities,
     adjustTime,
     updateEntryMutation,
@@ -47,6 +65,9 @@ const EntryCard = ({
     onPress
 }: {
     entry: TimeEntry,
+    column: number,
+    totalColumns: number,
+    hourHeight: number,
     activities: Activity[],
     adjustTime: (entry: TimeEntry, minutes: number, type: 'start' | 'end') => void,
     updateEntryMutation: any,
@@ -58,7 +79,13 @@ const EntryCard = ({
     const end = entry.endTime?.toDate() || new Date();
     const durationMin = differenceInMinutes(end, start);
     const activity = activities.find(a => a.id === entry.activityId);
-    const initialHeight = Math.max((durationMin / 60 * HOUR_HEIGHT), 40);
+    const initialHeight = Math.max((durationMin / 60 * hourHeight), MIN_ENTRY_HEIGHT);
+    const columnWidth = Math.max(
+        (EVENT_AREA_WIDTH - ((totalColumns - 1) * ENTRY_COLUMN_GAP)) / totalColumns,
+        48
+    );
+    const left = ENTRY_LEFT_OFFSET + (column * (columnWidth + ENTRY_COLUMN_GAP));
+    const durationLabel = `${Math.floor(durationMin / 60).toString().padStart(2, "0")}:${(durationMin % 60).toString().padStart(2, "0")}`;
 
     const isResizing = useSharedValue(false);
     const translateY = useSharedValue(0);
@@ -75,7 +102,7 @@ const EntryCard = ({
     }));
 
     const handleMove = (y: number) => {
-        const minutesDelta = (y / HOUR_HEIGHT) * 60;
+        const minutesDelta = (y / hourHeight) * 60;
         const newStart = addMinutes(start, minutesDelta);
         const newEnd = addMinutes(end, minutesDelta);
         updateEntryMutation.mutate({
@@ -89,7 +116,7 @@ const EntryCard = ({
     };
 
     const handleResize = (h: number) => {
-        const newDurationMin = (h / HOUR_HEIGHT) * 60;
+        const newDurationMin = (h / hourHeight) * 60;
         const newEndTime = addMinutes(start, newDurationMin);
         updateEntryMutation.mutate({
             id: entry.id,
@@ -124,7 +151,7 @@ const EntryCard = ({
             runOnJS(onPress)();
         });
 
-    const top = (start.getHours() * HOUR_HEIGHT) + (start.getMinutes() / 60 * HOUR_HEIGHT);
+    const top = (start.getHours() * hourHeight) + (start.getMinutes() / 60 * hourHeight);
 
     return (
         <GestureDetector gesture={Gesture.Exclusive(pan, tap)}>
@@ -134,6 +161,8 @@ const EntryCard = ({
                     animatedStyle,
                     {
                         top,
+                        left,
+                        width: columnWidth,
                         backgroundColor: (activity?.color || colors.primary.cyan) + '20',
                         borderLeftColor: activity?.color || colors.primary.cyan,
                         borderWidth: isSelected ? 2 : 0,
@@ -142,10 +171,15 @@ const EntryCard = ({
                 ]}
             >
                 <View style={styles.entryCardContent}>
-                    <Text style={[styles.entryTitle, { color: themeColors.textPrimary }]} numberOfLines={1}>
-                        {activity?.name || "Attività"}
-                    </Text>
-                    <Text style={[styles.entryDurationText, { color: themeColors.textSecondary }]}>
+                    <View style={styles.entryHeaderRow}>
+                        <Text style={[styles.entryTitle, { color: themeColors.textPrimary }]} numberOfLines={1}>
+                            {activity?.name || "Attività"}
+                        </Text>
+                        <Text style={[styles.entryDurationBadge, { color: themeColors.textPrimary }]} numberOfLines={1}>
+                            {durationLabel}
+                        </Text>
+                    </View>
+                    <Text style={[styles.entryDurationText, { color: themeColors.textSecondary }]} numberOfLines={1}>
                         {format(start, "HH:mm")} - {entry.endTime ? format(end, "HH:mm") : "In corso"}
                     </Text>
                 </View>
@@ -171,8 +205,11 @@ export default function CalendarScreen() {
     const [startHour, setStartHour] = useState<number>(9);
     const [startMinute, setStartMinute] = useState<number>(0);
     const [now, setNow] = useState(new Date());
+    const [hourHeight, setHourHeight] = useState<number>(HOUR_HEIGHT);
     const queryClient = useQueryClient();
     const scrollRef = useRef<ScrollView>(null);
+    const pinchBaseHourHeight = useSharedValue(HOUR_HEIGHT);
+    const pinchReportedHourHeight = useSharedValue(HOUR_HEIGHT);
 
     // Update current time indicator
     useEffect(() => {
@@ -214,6 +251,72 @@ export default function CalendarScreen() {
     const selectedEntry = useMemo(() => {
         return entries.find(e => e.id === selectedEntryId);
     }, [selectedEntryId, entries]);
+
+    const positionedEntries = useMemo<PositionedEntry[]>(() => {
+        if (entries.length === 0) {
+            return [];
+        }
+
+        const sorted = [...entries]
+            .map((entry) => {
+                const start = entry.startTime.toDate();
+                const end = entry.endTime?.toDate() || new Date();
+                const startMin = (start.getHours() * 60) + start.getMinutes();
+                const endMinRaw = (end.getHours() * 60) + end.getMinutes();
+                const endMin = Math.max(endMinRaw, startMin + 1);
+                return { entry, startMin, endMin };
+            })
+            .sort((a, b) => {
+                if (a.startMin !== b.startMin) return a.startMin - b.startMin;
+                return a.endMin - b.endMin;
+            });
+
+        const positioned: PositionedEntry[] = [];
+        const active: Array<{ endMin: number; column: number }> = [];
+        let clusterIndexes: number[] = [];
+        let clusterMaxColumns = 0;
+        const freeColumns: number[] = [];
+        let nextColumn = 0;
+
+        const flushCluster = () => {
+            if (clusterIndexes.length === 0) return;
+            for (const index of clusterIndexes) {
+                positioned[index].totalColumns = Math.max(clusterMaxColumns, 1);
+            }
+            clusterIndexes = [];
+            clusterMaxColumns = 0;
+        };
+
+        for (const item of sorted) {
+            for (let i = active.length - 1; i >= 0; i--) {
+                if (active[i].endMin <= item.startMin) {
+                    freeColumns.push(active[i].column);
+                    active.splice(i, 1);
+                }
+            }
+
+            if (active.length === 0) {
+                flushCluster();
+                freeColumns.length = 0;
+                nextColumn = 0;
+            }
+
+            freeColumns.sort((a, b) => a - b);
+            const assignedColumn = freeColumns.length > 0 ? freeColumns.shift()! : nextColumn++;
+
+            active.push({ endMin: item.endMin, column: assignedColumn });
+            clusterMaxColumns = Math.max(clusterMaxColumns, active.length);
+            const positionedIndex = positioned.push({
+                entry: item.entry,
+                column: assignedColumn,
+                totalColumns: 1
+            }) - 1;
+            clusterIndexes.push(positionedIndex);
+        }
+
+        flushCluster();
+        return positioned;
+    }, [entries]);
 
     const updateEntryMutation = useMutation({
         mutationFn: ({ id, data }: { id: string, data: Partial<TimeEntry> }) => api.updateEntry(id, data),
@@ -315,12 +418,12 @@ export default function CalendarScreen() {
     const renderTimeline = () => {
         const hours = Array.from({ length: 24 }, (_, i) => i);
         const isToday = isSameDay(selectedDate, new Date());
-        const nowPos = (now.getHours() * HOUR_HEIGHT) + (now.getMinutes() / 60 * HOUR_HEIGHT);
+        const nowPos = (now.getHours() * hourHeight) + (now.getMinutes() / 60 * hourHeight);
 
         return (
             <View style={styles.timelineContainer}>
                 {hours.map(hour => (
-                    <View key={hour} style={styles.hourRow}>
+                    <View key={hour} style={[styles.hourRow, { height: hourHeight }]}>
                         <View style={styles.hourLabelContainer}>
                             <Text style={[styles.hourLabel, { color: themeColors.textTertiary }]}>
                                 {hour.toString().padStart(2, '0')}:00
@@ -338,10 +441,13 @@ export default function CalendarScreen() {
                     </View>
                 )}
 
-                {entries.map((entry: TimeEntry) => (
+                {positionedEntries.map(({ entry, column, totalColumns }) => (
                     <EntryCard
                         key={entry.id}
                         entry={entry}
+                        column={column}
+                        totalColumns={totalColumns}
+                        hourHeight={hourHeight}
                         activities={activities}
                         adjustTime={adjustTime}
                         updateEntryMutation={updateEntryMutation}
@@ -396,6 +502,23 @@ export default function CalendarScreen() {
         );
     };
 
+    const pinchTimeline = Gesture.Pinch()
+        .onBegin(() => {
+            pinchBaseHourHeight.value = hourHeight;
+            pinchReportedHourHeight.value = hourHeight;
+        })
+        .onUpdate((event) => {
+            const nextHeight = clamp(pinchBaseHourHeight.value * event.scale, MIN_HOUR_HEIGHT, MAX_HOUR_HEIGHT);
+            if (Math.abs(nextHeight - pinchReportedHourHeight.value) >= 1) {
+                pinchReportedHourHeight.value = nextHeight;
+                runOnJS(setHourHeight)(Math.round(nextHeight));
+            }
+        })
+        .onEnd(() => {
+            const finalHeight = Math.round(clamp(pinchReportedHourHeight.value, MIN_HOUR_HEIGHT, MAX_HOUR_HEIGHT));
+            runOnJS(setHourHeight)(finalHeight);
+        });
+
     return (
         <SafeAreaView style={[styles.container, { backgroundColor: themeColors.background }]} edges={['top']}>
             <View style={styles.header}>
@@ -417,20 +540,22 @@ export default function CalendarScreen() {
                 <SelectedEventPanel />
             </View>
 
-            <ScrollView
-                ref={scrollRef}
-                style={styles.timelineScroll}
-                contentContainerStyle={styles.timelineScrollContent}
-                showsVerticalScrollIndicator={false}
-            >
-                {isLoading ? (
-                    <View style={styles.loadingContainer}>
-                        <ActivityIndicator color={colors.primary.cyan} size="large" />
-                    </View>
-                ) : (
-                    renderTimeline()
-                )}
-            </ScrollView>
+            <GestureDetector gesture={pinchTimeline}>
+                <ScrollView
+                    ref={scrollRef}
+                    style={styles.timelineScroll}
+                    contentContainerStyle={styles.timelineScrollContent}
+                    showsVerticalScrollIndicator={false}
+                >
+                    {isLoading ? (
+                        <View style={styles.loadingContainer}>
+                            <ActivityIndicator color={colors.primary.cyan} size="large" />
+                        </View>
+                    ) : (
+                        renderTimeline()
+                    )}
+                </ScrollView>
+            </GestureDetector>
 
             <Pressable style={styles.fab} onPress={handleAddManual}>
                 <Plus size={32} color="#FFF" />
@@ -671,8 +796,6 @@ const styles = StyleSheet.create({
     },
     entryCardAbsolute: {
         position: 'absolute',
-        left: 10,
-        right: 20,
         borderRadius: 12,
         borderLeftWidth: 6,
         padding: 10,
@@ -684,10 +807,20 @@ const styles = StyleSheet.create({
     entryTitle: {
         fontSize: typography.size.sm,
         fontWeight: typography.weight.bold,
+        flex: 1,
+        marginRight: 6,
     },
     entryDurationText: {
         fontSize: typography.size.xs,
         marginTop: 2,
+    },
+    entryHeaderRow: {
+        flexDirection: "row",
+        alignItems: "center",
+    },
+    entryDurationBadge: {
+        fontSize: typography.size.xs,
+        fontWeight: typography.weight.bold,
     },
     entryQuickActions: {
         flexDirection: 'row',
